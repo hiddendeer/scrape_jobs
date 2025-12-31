@@ -4,3 +4,6 @@ DrissionPage
 pymysql
 pydantic
 python-dotenv
+pandas
+numpy
+openpyxl

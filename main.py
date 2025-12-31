@@ -2,7 +2,8 @@ from fastapi import FastAPI, BackgroundTasks, HTTPException
 import logging
 from pydantic import BaseModel
 from scraper import BossScraper
-from database import init_db, insert_jobs
+from database import init_db, insert_jobs, get_jobs_info
+import pandas as pd
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -44,6 +45,15 @@ async def trigger_scrape(request: ScrapeRequest, background_tasks: BackgroundTas
     """
     background_tasks.add_task(run_scraper_task, request.keyword, request.pages)
     return {"message": f"Scraper started for keyword: {request.keyword}", "status": "processing"}
+
+@app.get("/health")
+async def health_check():
+    result = get_jobs_info()
+    df = pd.DataFrame(result)
+    ## 筛选出city=无锡的数据 and job_name字段包含EMS(不区分大小写)
+    df = df[(df['city'] == '杭州') & df['job_name'].str.contains('ems', na=False, case=False)]
+    
+    return {"status": "ok", "data": df.to_dict(orient='records'), "count": len(df)}
 
 if __name__ == "__main__":
     import uvicorn

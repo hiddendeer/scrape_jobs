@@ -78,3 +78,15 @@ def insert_jobs(jobs):
         conn.rollback()
     finally:
         conn.close()
+
+def get_jobs_info():
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            sql = "SELECT * FROM ems_jobs"
+            cursor.execute(sql)
+            return cursor.fetchall()
+    except Exception as e:
+        logger.error(f"Error getting jobs info: {e}")
+    finally:
+        conn.close()
