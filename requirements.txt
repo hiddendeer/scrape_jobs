@@ -1,0 +1,6 @@
+fastapi
+uvicorn
+DrissionPage
+pymysql
+pydantic
+python-dotenv
