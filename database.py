@@ -1,6 +1,7 @@
 import pymysql
 import logging
 import json
+from datetime import datetime
 from config import Config
 
 logger = logging.getLogger(__name__)
@@ -30,16 +31,16 @@ def insert_jobs(jobs):
         with conn.cursor() as cursor:
             # Updated SQL to match new schema
             sql = """
-            INSERT INTO ems_jobs (
+            INSERT INTO ems_jobs_new (
                 job_id, job_name, company_name, city, district,
                 salary_raw, salary_min, salary_max, salary_avg, salary_months,
                 experience_raw, exp_min, exp_max, 
-                education, skills_tags, detail_url
+                education, skills_tags, job_desc, detail_url, scraped_time
             ) VALUES (
                 %(job_id)s, %(job_name)s, %(company_name)s, %(city)s, %(district)s,
                 %(salary_raw)s, %(salary_min)s, %(salary_max)s, %(salary_avg)s, %(salary_months)s,
                 %(experience_raw)s, %(exp_min)s, %(exp_max)s,
-                %(education)s, %(skills_tags)s, %(detail_url)s
+                %(education)s, %(skills_tags)s, %(job_desc)s, %(detail_url)s, %(scraped_time)s
             )
             ON DUPLICATE KEY UPDATE
                 job_name = VALUES(job_name),
@@ -56,7 +57,9 @@ def insert_jobs(jobs):
                 exp_max = VALUES(exp_max),
                 education = VALUES(education),
                 skills_tags = VALUES(skills_tags),
-                detail_url = VALUES(detail_url)
+                job_desc = VALUES(job_desc),
+                detail_url = VALUES(detail_url),
+                scraped_time = VALUES(scraped_time)
             """
             
             # Prepare data first
@@ -65,6 +68,7 @@ def insert_jobs(jobs):
                 job_copy = job.copy()
                 if isinstance(job_copy.get('skills_tags'), list):
                     job_copy['skills_tags'] = json.dumps(job_copy['skills_tags'], ensure_ascii=False)
+                job_copy['scraped_time'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
                 prepared_jobs.append(job_copy)
 
             # Direct insertion without pre-checking name/company duplicates
@@ -83,7 +87,7 @@ def get_jobs_info():
     conn = get_connection()
     try:
         with conn.cursor() as cursor:
-            sql = "SELECT * FROM ems_jobs"
+            sql = "SELECT * FROM ems_jobs_new"
             cursor.execute(sql)
             return cursor.fetchall()
     except Exception as e:

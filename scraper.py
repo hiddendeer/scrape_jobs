@@ -18,7 +18,7 @@ class BossScraper:
             logger.error(f"Failed to connect to ChromiumPage: {e}")
             raise
 
-    def scrape_keyword(self, keyword, pages=3):
+    def scrape_keyword(self, keyword, pages=3, city_code="100010000"):
         """
         Scrapes job data using infinite scroll.
         'pages' here essentially means how many times to scroll/load more.
@@ -33,7 +33,7 @@ class BossScraper:
             
             # Navigate to initial Page
             # We assume the first page loads automatically upon visit
-            search_url = f'https://www.zhipin.com/web/geek/job?query={keyword}&city=101210700'
+            search_url = f'https://www.zhipin.com/web/geek/job?query={keyword}&city={city_code}'
             logger.info(f"Navigating to {search_url}")
             self.page.get(search_url)
             
@@ -77,8 +77,58 @@ class BossScraper:
                         
                         page_jobs = []
                         for job in job_list:
+                            encrypt_id = job.get('encryptJobId')
+                            # Find the job card in the list panel
+                            # The job card usually has a unique identifier or we can match via encrypt_id if present in DOM
+                            # Based on typical Boss Zhipin structure, we can try finding by text or index
+                            # Let's try to click the card to reveal description
+                            logger.info(f"Extracting description for job: {job.get('jobName')}...")
+                            
+                            job_desc = ""
+                            try:
+                                # Optimized selector: targeting the job card's main clickable area
+                                # We use a more stable XPath combined with encryption ID
+                                card_selector = f'xpath://li[.//a[contains(@href, "{encrypt_id}")]]//div[contains(@class, "job-card-left")]'
+                                card = self.page.ele(card_selector, timeout=5)
+                                if not card:
+                                    # Fallback: try the link itself
+                                    card = self.page.ele(f'xpath://a[contains(@href, "{encrypt_id}")]', timeout=2)
+                                
+                                if card:
+                                    # Ensure card is in view and click
+                                    card.scroll.to_see()
+                                    card.click()
+                                    
+                                    # Wait a split second for the JS trigger to reflect in the DOM
+                                    time.sleep(0.8)
+                                    
+                                    # Try multiple selectors for the description content
+                                    # .job-detail-box .desc is primary (based on user image)
+                                    # Others are fallbacks
+                                    desc_selectors = [
+                                        '.job-detail-box .desc',
+                                        '.job-detail-box .job-sec-text',
+                                        'xpath://p[contains(@class, "desc")]',
+                                        '.job-detail-body .desc'
+                                    ]
+                                    
+                                    found_desc = False
+                                    for selector in desc_selectors:
+                                        desc_ele = self.page.ele(selector, timeout=3)
+                                        if desc_ele and desc_ele.text.strip():
+                                            job_desc = desc_ele.text.strip()
+                                            found_desc = True
+                                            break
+                                    
+                                    if not found_desc:
+                                        logger.warning(f"Description element not found for {encrypt_id} after trying multiple selectors.")
+                                else:
+                                    logger.warning(f"Card element not found for {encrypt_id}")
+                            except Exception as e:
+                                logger.error(f"Error clicking/extracting description: {e}")
+
                             raw_job = {
-                                'encryptJobId': job.get('encryptJobId'),
+                                'encryptJobId': encrypt_id,
                                 'jobName': job.get('jobName'),
                                 'brandName': job.get('brandName'),
                                 'cityName': job.get('cityName'),
@@ -87,6 +137,7 @@ class BossScraper:
                                 'jobExperience': job.get('jobExperience'),
                                 'jobDegree': job.get('jobDegree'),
                                 'skills': job.get('skills', []),
+                                'job_desc': job_desc,
                             }
                             
                             standardized_job = standardize_job(raw_job)

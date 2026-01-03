@@ -82,5 +82,6 @@ def standardize_job(job_data):
         'exp_max': exp_max, # New field
         'education': job_data.get('jobDegree'),
         'skills_tags': job_data.get('skills', []),
+        'job_desc': job_data.get('job_desc'),
         'detail_url': f"https://www.zhipin.com/job_detail/{job_data.get('encryptJobId')}.html"
     }

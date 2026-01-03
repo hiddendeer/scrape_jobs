@@ -19,14 +19,15 @@ def startup_event():
 class ScrapeRequest(BaseModel):
     keyword: str
     pages: int = 3
+    city: str = "101210700"  # Default to Wuxi
 
-def run_scraper_task(keyword: str, pages: int):
-    logger.info(f"Starting background scrape task for '{keyword}' with {pages} pages.")
+def run_scraper_task(keyword: str, pages: int, city: str):
+    logger.info(f"Starting background scrape task for '{keyword}' with {pages} pages in city {city}.")
     total_jobs = 0
     try:
         scraper = BossScraper()
         # Returns a generator now, need to iterate
-        for jobs_chunk in scraper.scrape_keyword(keyword, pages):
+        for jobs_chunk in scraper.scrape_keyword(keyword, pages, city):
             if jobs_chunk:
                 insert_jobs(jobs_chunk)
                 total_jobs += len(jobs_chunk)
@@ -43,8 +44,8 @@ async def trigger_scrape(request: ScrapeRequest, background_tasks: BackgroundTas
     """
     Trigger a scrape task.
     """
-    background_tasks.add_task(run_scraper_task, request.keyword, request.pages)
-    return {"message": f"Scraper started for keyword: {request.keyword}", "status": "processing"}
+    background_tasks.add_task(run_scraper_task, request.keyword, request.pages, request.city)
+    return {"message": f"Scraper started for keyword: {request.keyword} in city: {request.city}", "status": "processing"}
 
 @app.get("/health")
 async def health_check():
