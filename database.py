@@ -1,3 +1,4 @@
+from typing import List
 import pymysql
 import logging
 import json
@@ -31,7 +32,7 @@ def insert_jobs(jobs):
         with conn.cursor() as cursor:
             # Updated SQL to match new schema
             sql = """
-            INSERT INTO ems_jobs_new (
+            INSERT INTO agent_jobs (
                 job_id, job_name, company_name, city, district,
                 salary_raw, salary_min, salary_max, salary_avg, salary_months,
                 experience_raw, exp_min, exp_max, 
@@ -92,5 +93,52 @@ def get_jobs_info():
             return cursor.fetchall()
     except Exception as e:
         logger.error(f"Error getting jobs info: {e}")
+    finally:
+        conn.close()
+
+def get_agent_jobs_info():
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            sql = "SELECT * FROM agent_jobs"
+            cursor.execute(sql)
+            return cursor.fetchall()
+    except Exception as e:
+        logger.error(f"Error getting jobs info: {e}")
+    finally:
+        conn.close()
+
+def handle_job_info(job_ids: List[str]):
+    if not job_ids:
+        return
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            # Use format to generate correct number of placeholders
+            format_strings = ','.join(['%s'] * len(job_ids))
+            sql = f"UPDATE ems_jobs_new SET is_deleted = 1 WHERE job_id IN ({format_strings})"
+            cursor.execute(sql, tuple(job_ids))
+            conn.commit()
+            logger.info(f"Deleted {len(job_ids)} jobs from database.")
+    except Exception as e:
+        logger.error(f"Error deleting jobs: {e}")
+        conn.rollback()
+    finally:
+        conn.close()
+def handle_agent_job_info(job_ids: List[str]):
+    if not job_ids:
+        return
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            # Use format to generate correct number of placeholders
+            format_strings = ','.join(['%s'] * len(job_ids))
+            sql = f"UPDATE agent_jobs SET is_deleted = 1 WHERE job_id IN ({format_strings})"
+            cursor.execute(sql, tuple(job_ids))
+            conn.commit()
+            logger.info(f"Marked {len(job_ids)} agent jobs as deleted.")
+    except Exception as e:
+        logger.error(f"Error updating agent jobs: {e}")
+        conn.rollback()
     finally:
         conn.close()
