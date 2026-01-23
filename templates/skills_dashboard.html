@@ -1,0 +1,481 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Agent Skills Dashboard - 技能分析仪表板</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Microsoft YaHei', sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+
+        .header {
+            background: white;
+            padding: 30px;
+            border-radius: 15px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+            margin-bottom: 30px;
+            text-align: center;
+        }
+
+        .header h1 {
+            color: #667eea;
+            font-size: 2.5em;
+            margin-bottom: 10px;
+        }
+
+        .header p {
+            color: #666;
+            font-size: 1.1em;
+        }
+
+        .controls {
+            background: white;
+            padding: 25px;
+            border-radius: 15px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+            margin-bottom: 30px;
+            display: flex;
+            gap: 15px;
+            flex-wrap: wrap;
+            align-items: center;
+        }
+
+        .input-group {
+            flex: 1;
+            min-width: 250px;
+        }
+
+        .input-group label {
+            display: block;
+            margin-bottom: 8px;
+            color: #333;
+            font-weight: 600;
+        }
+
+        .input-group input {
+            width: 100%;
+            padding: 12px 15px;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            font-size: 14px;
+            transition: all 0.3s;
+        }
+
+        .input-group input:focus {
+            outline: none;
+            border-color: #667eea;
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+        }
+
+        .btn {
+            padding: 12px 30px;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+            margin-top: 24px;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 20px rgba(102, 126, 234, 0.4);
+        }
+
+        .btn-primary:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .content {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 30px;
+            margin-bottom: 30px;
+        }
+
+        @media (max-width: 1024px) {
+            .content {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        .card {
+            background: white;
+            padding: 30px;
+            border-radius: 15px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+        }
+
+        .card h2 {
+            color: #333;
+            margin-bottom: 20px;
+            font-size: 1.5em;
+            border-bottom: 3px solid #667eea;
+            padding-bottom: 10px;
+        }
+
+        .wordcloud-container {
+            text-align: center;
+            min-height: 400px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .wordcloud-container img {
+            max-width: 100%;
+            height: auto;
+            border-radius: 10px;
+            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.1);
+        }
+
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: #667eea;
+        }
+
+        .loading::after {
+            content: '...';
+            animation: dots 1.5s steps(4, end) infinite;
+        }
+
+        @keyframes dots {
+            0%, 20% { content: '.'; }
+            40% { content: '..'; }
+            60%, 100% { content: '...'; }
+        }
+
+        .skills-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 15px;
+        }
+
+        .skills-table th {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 15px;
+            text-align: left;
+            font-weight: 600;
+        }
+
+        .skills-table th:first-child {
+            border-radius: 8px 0 0 0;
+        }
+
+        .skills-table th:last-child {
+            border-radius: 0 8px 0 0;
+        }
+
+        .skills-table td {
+            padding: 12px 15px;
+            border-bottom: 1px solid #f0f0f0;
+        }
+
+        .skills-table tr:hover {
+            background: #f8f9ff;
+        }
+
+        .skills-table tr:last-child td:first-child {
+            border-radius: 0 0 0 8px;
+        }
+
+        .skills-table tr:last-child td:last-child {
+            border-radius: 0 0 8px 0;
+        }
+
+        .rank {
+            display: inline-block;
+            width: 30px;
+            height: 30px;
+            line-height: 30px;
+            text-align: center;
+            border-radius: 50%;
+            background: #667eea;
+            color: white;
+            font-weight: 600;
+            font-size: 14px;
+        }
+
+        .rank-1 { background: #ffd700; color: #333; }
+        .rank-2 { background: #c0c0c0; color: #333; }
+        .rank-3 { background: #cd7f32; color: white; }
+
+        .skill-name {
+            font-weight: 600;
+            color: #333;
+            text-transform: capitalize;
+        }
+
+        .count-bar {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .count {
+            font-weight: 600;
+            color: #667eea;
+            min-width: 60px;
+            text-align: right;
+        }
+
+        .bar {
+            flex: 1;
+            height: 8px;
+            background: #f0f0f0;
+            border-radius: 4px;
+            overflow: hidden;
+        }
+
+        .bar-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+            transition: width 0.5s ease;
+            border-radius: 4px;
+        }
+
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+
+        .stat-card {
+            background: white;
+            padding: 25px;
+            border-radius: 15px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+            text-align: center;
+        }
+
+        .stat-card .label {
+            color: #666;
+            font-size: 0.9em;
+            margin-bottom: 10px;
+        }
+
+        .stat-card .value {
+            color: #667eea;
+            font-size: 2.5em;
+            font-weight: 700;
+        }
+
+        .error {
+            background: #fee;
+            border: 1px solid #fcc;
+            color: #c33;
+            padding: 20px;
+            border-radius: 8px;
+            margin: 20px 0;
+        }
+
+        .no-data {
+            text-align: center;
+            padding: 40px;
+            color: #999;
+        }
+
+        .checkbox-group {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-top: 24px;
+        }
+
+        .checkbox-group input[type="checkbox"] {
+            width: 20px;
+            height: 20px;
+            cursor: pointer;
+        }
+
+        .checkbox-group label {
+            margin: 0;
+            cursor: pointer;
+            user-select: none;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <div class="header">
+            <h1>🤖 AI Agent Skills Dashboard</h1>
+            <p>基于 Boss 直聘数据的 AI Agent 技能分析仪表板</p>
+        </div>
+
+        <!-- Statistics -->
+        <div class="stats" id="stats" style="display: none;">
+            <div class="stat-card">
+                <div class="label">分析的职位数量</div>
+                <div class="value" id="totalJobs">0</div>
+            </div>
+            <div class="stat-card">
+                <div class="label">识别的技能总数</div>
+                <div class="value" id="totalSkills">0</div>
+            </div>
+            <div class="stat-card">
+                <div class="label">展示的技能数量</div>
+                <div class="value" id="displayedSkills">0</div>
+            </div>
+        </div>
+
+        <!-- Controls -->
+        <div class="controls">
+            <div class="input-group">
+                <label for="tableInput">数据表名称 (可选)</label>
+                <input type="text" id="tableInput" placeholder="例如: boss_jobs_20250123">
+            </div>
+            <div class="checkbox-group">
+                <input type="checkbox" id="wordcloudCheckbox" checked>
+                <label for="wordcloudCheckbox">生成词云图</label>
+            </div>
+            <button class="btn btn-primary" onclick="analyzeSkills()">分析技能</button>
+        </div>
+
+        <!-- Error Container -->
+        <div id="errorContainer"></div>
+
+        <!-- Content -->
+        <div class="content">
+            <!-- Word Cloud Card -->
+            <div class="card">
+                <h2>📊 技能词云</h2>
+                <div class="wordcloud-container" id="wordcloudContainer">
+                    <div class="no-data">
+                        <p>👈 点击"分析技能"按钮开始分析</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Top Skills Card -->
+            <div class="card">
+                <h2>🏆 TOP 20 技能排行</h2>
+                <div id="skillsContainer">
+                    <div class="no-data">
+                        <p>暂无数据</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE_URL = 'http://localhost:8001';
+
+        async function analyzeSkills() {
+            const table = document.getElementById('tableInput').value.trim();
+            const generateWordcloud = document.getElementById('wordcloudCheckbox').checked;
+
+            // Clear previous results
+            document.getElementById('wordcloudContainer').innerHTML = '<div class="loading">正在分析数据</div>';
+            document.getElementById('skillsContainer').innerHTML = '<div class="loading">正在加载技能列表</div>';
+            document.getElementById('errorContainer').innerHTML = '';
+            document.getElementById('stats').style.display = 'none';
+
+            try {
+                // Build query parameters
+                const params = new URLSearchParams();
+                if (table) params.append('table', table);
+                params.append('generate_wordcloud_img', generateWordcloud);
+
+                // Fetch data
+                const response = await fetch(`${API_BASE_URL}/data/analyze-agent-skills?${params}`);
+
+                if (!response.ok) {
+                    throw new Error(`API 请求失败: ${response.status} ${response.statusText}`);
+                }
+
+                const data = await response.json();
+
+                // Update statistics
+                document.getElementById('totalJobs').textContent = data.total_jobs_analyzed || 0;
+                document.getElementById('totalSkills').textContent = data.top_skills.reduce((sum, s) => sum + s.count, 0);
+                document.getElementById('displayedSkills').textContent = data.top_skills.length;
+                document.getElementById('stats').style.display = 'grid';
+
+                // Display word cloud
+                if (data.wordcloud) {
+                    document.getElementById('wordcloudContainer').innerHTML =
+                        `<img src="data:image/png;base64,${data.wordcloud}" alt="Skills Word Cloud">`;
+                } else {
+                    document.getElementById('wordcloudContainer').innerHTML =
+                        '<div class="no-data"><p>词云未生成</p></div>';
+                }
+
+                // Display skills table
+                if (data.top_skills && data.top_skills.length > 0) {
+                    const maxCount = Math.max(...data.top_skills.map(s => s.count));
+                    let tableHTML = '<table class="skills-table"><thead><tr><th>排名</th><th>技能名称</th><th>出现次数</th></tr></thead><tbody>';
+
+                    data.top_skills.forEach((skill, index) => {
+                        const rank = index + 1;
+                        const percentage = (skill.count / maxCount * 100).toFixed(1);
+                        const rankClass = rank <= 3 ? `rank-${rank}` : '';
+
+                        tableHTML += `
+                            <tr>
+                                <td><span class="rank ${rankClass}">${rank}</span></td>
+                                <td>
+                                    <div class="skill-name">${skill.skill}</div>
+                                </td>
+                                <td>
+                                    <div class="count-bar">
+                                        <div class="count">${skill.count}</div>
+                                        <div class="bar">
+                                            <div class="bar-fill" style="width: ${percentage}%"></div>
+                                        </div>
+                                    </div>
+                                </td>
+                            </tr>
+                        `;
+                    });
+
+                    tableHTML += '</tbody></table>';
+                    document.getElementById('skillsContainer').innerHTML = tableHTML;
+                } else {
+                    document.getElementById('skillsContainer').innerHTML =
+                        '<div class="no-data"><p>未找到技能数据</p></div>';
+                }
+
+            } catch (error) {
+                console.error('Error:', error);
+                document.getElementById('errorContainer').innerHTML =
+                    `<div class="error">❌ 错误: ${error.message}<br>请确保 API 服务正在运行 (${API_BASE_URL})</div>`;
+                document.getElementById('wordcloudContainer').innerHTML =
+                    '<div class="no-data"><p>加载失败</p></div>';
+                document.getElementById('skillsContainer').innerHTML =
+                    '<div class="no-data"><p>加载失败</p></div>';
+            }
+        }
+
+        // Auto-analyze on page load (optional)
+        // window.onload = () => analyzeSkills();
+    </script>
+</body>
+</html>

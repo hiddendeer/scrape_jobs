@@ -1,4 +1,4 @@
-from typing import List
+from typing import List, Optional
 import pymysql
 import logging
 import json
@@ -23,19 +23,20 @@ def init_db():
     # But for safety, we keep connection check.
     pass
 
-def insert_jobs(jobs):
+def insert_jobs(jobs, table: Optional[str] = None):
     if not jobs:
         return
-    
+
+    target_table = table or Config.INSERT_JOBS_TABLE
     conn = get_connection()
     try:
         with conn.cursor() as cursor:
             # Updated SQL to match new schema
-            sql = """
-            INSERT INTO agent_jobs (
+            sql = f"""
+            INSERT INTO {target_table} (
                 job_id, job_name, company_name, city, district,
                 salary_raw, salary_min, salary_max, salary_avg, salary_months,
-                experience_raw, exp_min, exp_max, 
+                experience_raw, exp_min, exp_max,
                 education, skills_tags, job_desc, detail_url, scraped_time
             ) VALUES (
                 %(job_id)s, %(job_name)s, %(company_name)s, %(city)s, %(district)s,
@@ -62,7 +63,7 @@ def insert_jobs(jobs):
                 detail_url = VALUES(detail_url),
                 scraped_time = VALUES(scraped_time)
             """
-            
+
             # Prepare data first
             prepared_jobs = []
             for job in jobs:
@@ -76,7 +77,7 @@ def insert_jobs(jobs):
             # We still use ON DUPLICATE KEY UPDATE to handle job_id conflicts safely
             cursor.executemany(sql, prepared_jobs)
             conn.commit()
-            logger.info(f"Inserted/Updated {len(jobs)} jobs.")
+            logger.info(f"Inserted/Updated {len(jobs)} jobs into table '{target_table}'.")
 
     except Exception as e:
         logger.error(f"Error inserting jobs: {e}")
@@ -84,11 +85,12 @@ def insert_jobs(jobs):
     finally:
         conn.close()
 
-def get_jobs_info():
+def get_jobs_info(table: Optional[str] = None):
+    target_table = table or Config.QUERY_JOBS_TABLE
     conn = get_connection()
     try:
         with conn.cursor() as cursor:
-            sql = "SELECT * FROM ems_jobs_new"
+            sql = f"SELECT * FROM {target_table}"
             cursor.execute(sql)
             return cursor.fetchall()
     except Exception as e:
@@ -96,11 +98,12 @@ def get_jobs_info():
     finally:
         conn.close()
 
-def get_agent_jobs_info():
+def get_agent_jobs_info(table: Optional[str] = None):
+    target_table = table or Config.INSERT_JOBS_TABLE
     conn = get_connection()
     try:
         with conn.cursor() as cursor:
-            sql = "SELECT * FROM agent_jobs"
+            sql = f"SELECT * FROM {target_table}"
             cursor.execute(sql)
             return cursor.fetchall()
     except Exception as e:
@@ -108,35 +111,38 @@ def get_agent_jobs_info():
     finally:
         conn.close()
 
-def handle_job_info(job_ids: List[str]):
+def handle_job_info(job_ids: List[str], table: Optional[str] = None):
     if not job_ids:
         return
+    target_table = table or Config.QUERY_JOBS_TABLE
     conn = get_connection()
     try:
         with conn.cursor() as cursor:
             # Use format to generate correct number of placeholders
             format_strings = ','.join(['%s'] * len(job_ids))
-            sql = f"UPDATE ems_jobs_new SET is_deleted = 1 WHERE job_id IN ({format_strings})"
+            sql = f"UPDATE {target_table} SET is_deleted = 1 WHERE job_id IN ({format_strings})"
             cursor.execute(sql, tuple(job_ids))
             conn.commit()
-            logger.info(f"Deleted {len(job_ids)} jobs from database.")
+            logger.info(f"Deleted {len(job_ids)} jobs from table '{target_table}'.")
     except Exception as e:
         logger.error(f"Error deleting jobs: {e}")
         conn.rollback()
     finally:
         conn.close()
-def handle_agent_job_info(job_ids: List[str]):
+
+def handle_agent_job_info(job_ids: List[str], table: Optional[str] = None):
     if not job_ids:
         return
+    target_table = table or Config.INSERT_JOBS_TABLE
     conn = get_connection()
     try:
         with conn.cursor() as cursor:
             # Use format to generate correct number of placeholders
             format_strings = ','.join(['%s'] * len(job_ids))
-            sql = f"UPDATE agent_jobs SET is_deleted = 1 WHERE job_id IN ({format_strings})"
+            sql = f"UPDATE {target_table} SET is_deleted = 1 WHERE job_id IN ({format_strings})"
             cursor.execute(sql, tuple(job_ids))
             conn.commit()
-            logger.info(f"Marked {len(job_ids)} agent jobs as deleted.")
+            logger.info(f"Marked {len(job_ids)} agent jobs as deleted in table '{target_table}'.")
     except Exception as e:
         logger.error(f"Error updating agent jobs: {e}")
         conn.rollback()
