@@ -1,0 +1,736 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI 职业规划分析 - 实时流式分析</title>
+
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+
+    <!-- React CDN -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+
+    <!-- Babel Standalone for JSX -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+    <!-- Custom Config for Tailwind -->
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        primary: {
+                            50: '#f5f3ff',
+                            100: '#ede9fe',
+                            200: '#ddd6fe',
+                            300: '#c4b5fd',
+                            400: '#a78bfa',
+                            500: '#8b5cf6',
+                            600: '#7c3aed',
+                            700: '#6d28d9',
+                            800: '#5b21b6',
+                            900: '#4c1d95',
+                        },
+                    },
+                    animation: {
+                        'shimmer': 'shimmer 2s ease-in-out infinite',
+                        'breathe': 'breathe 2s ease-in-out infinite',
+                        'fade-in': 'fadeIn 0.5s ease-in-out',
+                        'slide-up': 'slideUp 0.4s ease-out',
+                        'pulse-slow': 'pulse 3s cubic-bezier(0.4, 0, 0.6, 1) infinite',
+                    },
+                    keyframes: {
+                        shimmer: {
+                            '0%, 100%': { backgroundPosition: '0% 50%' },
+                            '50%': { backgroundPosition: '100% 50%' },
+                        },
+                        breathe: {
+                            '0%, 100%': { transform: 'scale(1)', opacity: '1' },
+                            '50%': { transform: 'scale(1.2)', opacity: '0.7' },
+                        },
+                        fadeIn: {
+                            '0%': { opacity: '0' },
+                            '100%': { opacity: '1' },
+                        },
+                        slideUp: {
+                            '0%': { transform: 'translateY(20px)', opacity: '0' },
+                            '100%': { transform: 'translateY(0)', opacity: '1' },
+                        },
+                    },
+                },
+            },
+        }
+    </script>
+
+    <style>
+        body {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+        }
+
+        /* Custom scrollbar */
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: #f1f1f1;
+            border-radius: 10px;
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            border-radius: 10px;
+        }
+
+        ::-webkit-scrollbar-thumb:hover {
+            background: linear-gradient(135deg, #5b21b6 0%, #4c1d95 100%);
+        }
+
+        /* Progress bar shine effect */
+        .progress-shine::after {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: -100%;
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(90deg,
+                    transparent,
+                    rgba(255, 255, 255, 0.3),
+                    transparent);
+            animation: shine 1.5s infinite;
+        }
+
+        @keyframes shine {
+            100% {
+                left: 100%;
+            }
+        }
+    </style>
+</head>
+
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef } = React;
+
+        // 主应用组件
+        function App() {
+            const [analyzing, setAnalyzing] = useState(false);
+            const [completed, setCompleted] = useState(false);
+            const [progress, setProgress] = useState(0);
+            const [status, setStatus] = useState('');
+            const [streamContent, setStreamContent] = useState(''); // 保持向后兼容
+            const [thoughtContent, setThoughtContent] = useState('');
+            const [answerContent, setAnswerContent] = useState('');
+            const [inThinkBlock, setInThinkBlock] = useState(false);
+            const [report, setReport] = useState(null);
+            const [error, setError] = useState(null);
+            const [prompt, setPrompt] = useState('');
+
+            const totalJobs = Number("{{ total_jobs }}") || 0;
+            const streamEndRef = useRef(null);
+
+        // 自动滚动到底部
+        useEffect(() => {
+            if (streamEndRef.current) {
+                streamEndRef.current.scrollIntoView({ behavior: 'smooth' });
+            }
+        }, [thoughtContent, answerContent]);
+
+        const startAnalysis = async () => {
+            setAnalyzing(true);
+            setCompleted(false);
+            setProgress(0);
+            setStatus('正在初始化...');
+            setStreamContent('');
+            setThoughtContent('');
+            setAnswerContent('');
+            setInThinkBlock(false);
+            setReport(null);
+            setError(null);
+
+            try {
+                let url = window.location.href.replace('/analyze-career-stream', '/api/analyze-career-stream');
+                if (prompt.trim()) {
+                    const separator = url.includes('?') ? '&' : '?';
+                    url += `${separator}prompt=${encodeURIComponent(prompt.trim())}`;
+                }
+                const eventSource = new EventSource(url);
+
+                eventSource.onmessage = (event) => {
+                    try {
+                        const data = JSON.parse(event.data);
+
+                        switch (data.type) {
+                            case 'status':
+                                setProgress(data.progress);
+                                setStatus(data.message);
+                                break;
+
+                            case 'chunk':
+                                if (data.content) {
+                                    const content = data.content;
+                                    const isExplicitThought = data.is_thought === true;
+                                    
+                                    // 检测标签并更新状态
+                                    if (content.includes('<think>')) setInThinkBlock(true);
+                                    if (content.includes('</think>')) setInThinkBlock(false);
+                                    
+                                    // 去除标签后的干净内容
+                                    const cleanContent = content.replace(/<\/?think>/g, '');
+                                    
+                                    // 分流逻辑：优先使用后端的明确标记，否则使用前端检测到的状态
+                                    if (isExplicitThought) {
+                                        setThoughtContent(prev => prev + cleanContent);
+                                    } else {
+                                        // 使用 setInThinkBlock 的最新预期值
+                                        // 注意：在同一个事件循环中，我们在这里再次判断是否存在标签来决定去向
+                                        setInThinkBlock(currentlyThinking => {
+                                            if (currentlyThinking || content.includes('<think>')) {
+                                                setThoughtContent(prev => prev + cleanContent);
+                                            } else {
+                                                setAnswerContent(prev => prev + cleanContent);
+                                            }
+                                            return currentlyThinking;
+                                        });
+                                    }
+                                }
+                                break;
+
+                            case 'tool_start':
+                                setThoughtContent(prev => prev + `\n> 🛠️ **正在执行工具**: \`${data.tool}\`\n> **输入参数**: \`${JSON.stringify(data.input)}\`\n`);
+                                setStatus(data.message);
+                                break;
+
+                            case 'tool_end':
+                                setThoughtContent(prev => prev + `\n> ✅ **工具执行完毕**: \`${data.tool}\`\n\n`);
+                                setStatus(data.message);
+                                break;
+
+                            case 'complete':
+                                setProgress(100);
+                                setStatus('分析完成！');
+                                setCompleted(true);
+                                setAnalyzing(false);
+                                setReport(data.data);
+                                eventSource.close();
+                                break;
+
+                            case 'error':
+                                setError(data.message);
+                                setAnalyzing(false);
+                                eventSource.close();
+                                break;
+                        }
+                    } catch (e) {
+                        console.error('解析数据失败:', e);
+                    }
+                };
+
+                eventSource.onerror = (error) => {
+                    console.error('EventSource 错误:', error);
+                    setError('连接中断，请重试');
+                    setAnalyzing(false);
+                    eventSource.close();
+                };
+
+                // 5分钟超时
+                setTimeout(() => {
+                    if (eventSource.readyState !== EventSource.CLOSED) {
+                        eventSource.close();
+                        setAnalyzing(false);
+                        setError('分析超时，请重试');
+                    }
+                }, 300000);
+
+            } catch (err) {
+                setError(err.message);
+                setAnalyzing(false);
+            }
+        };
+
+        return (
+            <div className="min-h-screen py-8 px-4 sm:px-6 lg:px-8">
+                <div className="max-w-5xl mx-auto">
+                    {/* 头部 */}
+                    <Header totalJobs={totalJobs} />
+
+                    {/* 主内容区 */}
+                    <div className="mt-8 space-y-6">
+                        {/* 开始按钮与提示词输入 - 仅在未开始时显示 */}
+                        {!analyzing && !completed && !error && (
+                            <div className="space-y-4 animate-slide-up">
+                                <div className="bg-white/95 backdrop-blur-sm rounded-2xl shadow-xl p-6 border border-white/20">
+                                    <label className="block text-gray-700 font-bold mb-2">
+                                        自定义分析需求 (可选)
+                                    </label>
+                                    <textarea
+                                        value={prompt}
+                                        onChange={(e) => setPrompt(e.target.value)}
+                                        placeholder="例如：统计一下当前职位最热门的技能，并为我规划一条学习路线..."
+                                        className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-primary-500 focus:border-transparent transition-all outline-none resize-none"
+                                        rows="3"
+                                    />
+                                </div>
+                                <StartButton onStart={startAnalysis} />
+                            </div>
+                        )}
+
+                        {/* 错误提示 */}
+                        {error && (
+                            <ErrorCard message={error} onRetry={startAnalysis} />
+                        )}
+
+                        {/* 进度卡片 */}
+                        {(analyzing || completed) && (
+                            <ProgressCard
+                                progress={progress}
+                                status={status}
+                                completed={completed}
+                            />
+                        )}
+
+                        {/* 流式输出区域 - 思考与回答分开展示 */}
+                        {(analyzing || thoughtContent) && !report && (
+                            <ThinkingCard content={thoughtContent} />
+                        )}
+
+                        {(analyzing || answerContent) && !report && (
+                            <AnswerCard content={answerContent} streamEndRef={streamEndRef} />
+                        )}
+
+                        {/* 最终报告 */}
+                        {report && (
+                            <ReportCard report={report} />
+                        )}
+                    </div>
+
+                    {/* 页脚 */}
+                    <Footer />
+                </div>
+            </div>
+        );
+        }
+
+        // 头部组件
+        function Header({ totalJobs }) {
+            return (
+                <div className="text-center animate-fade-in">
+                    <div className="inline-flex items-center justify-center w-20 h-20 bg-white rounded-full shadow-2xl mb-6">
+                        <span className="text-4xl">🚀</span>
+                    </div>
+                    <h1 className="text-4xl sm:text-5xl font-bold text-white mb-4">
+                        AI 职业规划分析
+                    </h1>
+                    <p className="text-xl text-white/90 mb-2">
+                        基于 {totalJobs} 个职位数据的实时流式分析
+                    </p>
+                    <p className="text-white/70 text-sm">
+                        使用 LangChain + AI 技术生成个性化职业发展报告
+                    </p>
+                </div>
+            );
+        }
+
+        // 开始按钮组件
+        function StartButton({ onStart }) {
+            return (
+                <div className="animate-slide-up">
+                    <button
+                        onClick={onStart}
+                        className="group relative w-full py-6 px-8 bg-white rounded-2xl shadow-2xl hover:shadow-3xl transition-all duration-300 hover:scale-[1.02] active:scale-[0.98]"
+                    >
+                        <div className="flex items-center justify-center gap-4">
+                            <div className="w-16 h-16 bg-gradient-to-br from-primary-500 to-primary-700 rounded-xl flex items-center justify-center group-hover:scale-110 transition-transform duration-300 shadow-lg">
+                                <svg className="w-8 h-8 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                                </svg>
+                            </div>
+                            <div className="text-left">
+                                <div className="text-2xl font-bold text-gray-800 mb-1">
+                                    开始分析
+                                </div>
+                                <div className="text-gray-500 text-sm">
+                                    点击按钮开始 AI 智能分析
+                                </div>
+                            </div>
+                            <svg className="w-6 h-6 text-primary-500 group-hover:translate-x-1 transition-transform duration-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7l5 5m0 0l-5 5m5-5H6" />
+                            </svg>
+                        </div>
+                    </button>
+                </div>
+            );
+        }
+
+        // 错误卡片组件
+        function ErrorCard({ message, onRetry }) {
+            return (
+                <div className="animate-slide-up">
+                    <div className="bg-red-50 border-l-4 border-red-500 rounded-r-xl p-6 shadow-lg">
+                        <div className="flex items-start gap-4">
+                            <div className="flex-shrink-0 w-12 h-12 bg-red-100 rounded-full flex items-center justify-center">
+                                <svg className="w-6 h-6 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                                </svg>
+                            </div>
+                            <div className="flex-1">
+                                <h3 className="text-lg font-semibold text-red-800 mb-2">
+                                    分析失败
+                                </h3>
+                                <p className="text-red-600 mb-4">{message}</p>
+                                <button
+                                    onClick={onRetry}
+                                    className="px-4 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600 transition-colors duration-200 text-sm font-medium"
+                                >
+                                    重试
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        // 进度卡片组件
+        function ProgressCard({ progress, status, completed }) {
+            const getStatusText = (p) => {
+                if (p >= 100) return '已完成';
+                if (p >= 50) return '分析中';
+                if (p >= 10) return '处理中';
+                return '准备中';
+            };
+
+            const getStatusColor = (p) => {
+                if (p >= 100) return 'bg-green-500';
+                if (p >= 50) return 'bg-blue-500';
+                if (p >= 10) return 'bg-purple-500';
+                return 'bg-gray-400';
+            };
+
+            return (
+                <div className="animate-fade-in">
+                    <div className="bg-white/95 backdrop-blur-sm rounded-2xl shadow-2xl p-8 border border-white/20">
+                        {/* 头部 */}
+                        <div className="flex items-center justify-between mb-6">
+                            <div className="flex items-center gap-3">
+                                <div className={`w-3 h-3 rounded-full ${getStatusColor(progress)} ${!completed && 'animate-breathe'}`} />
+                                <h3 className="text-xl font-bold text-gray-800">
+                                    分析进度
+                                </h3>
+                            </div>
+                            <div className={`px-4 py-2 rounded-full text-sm font-semibold text-white ${getStatusColor(progress)}`}>
+                                {getStatusText(progress)}
+                            </div>
+                        </div>
+
+                        {/* 状态文本 */}
+                        <p className="text-gray-600 mb-6 text-sm leading-relaxed min-h-[24px]">
+                            {status}
+                        </p>
+
+                        {/* 进度条容器 */}
+                        <div className="relative h-3 bg-gray-200 rounded-full overflow-hidden shadow-inner">
+                            {/* 进度条 */}
+                            <div
+                                className={`absolute top-0 left-0 h-full transition-all duration-500 ease-out rounded-full ${completed
+                                    ? 'bg-gradient-to-r from-green-400 to-green-600'
+                                    : 'bg-gradient-to-r from-primary-400 via-primary-600 to-primary-800 animate-shimmer'
+                                    } progress-shine`}
+                                style={{ width: `${progress}%`, backgroundSize: '200% 100%' }}
+                            />
+                        </div>
+
+                        {/* 百分比 */}
+                        <div className="mt-3 text-center">
+                            <span className={`text-3xl font-bold ${completed ? 'text-green-600' : 'text-primary-600'}`}>
+                                {progress}%
+                            </span>
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        // 思考过程卡片
+        function ThinkingCard({ content }) {
+            if (!content) return null;
+            return (
+                <div className="animate-slide-up mb-6">
+                    <div className="bg-white/90 backdrop-blur-sm rounded-2xl shadow-xl overflow-hidden border border-white/20">
+                        <div className="bg-gradient-to-r from-gray-600 to-gray-800 px-6 py-3">
+                            <div className="flex items-center gap-3">
+                                <div className="w-2 h-2 bg-yellow-400 rounded-full animate-pulse" />
+                                <h3 className="text-sm font-bold text-white uppercase tracking-wider">
+                                    AI 思考与工具轨迹
+                                </h3>
+                            </div>
+                        </div>
+                        <div className="p-6 max-h-60 overflow-y-auto bg-gray-50/50">
+                            <pre className="font-mono text-xs text-gray-600 whitespace-pre-wrap leading-relaxed">
+                                {content}
+                            </pre>
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        // 最终回答卡片 (流式内容)
+        function AnswerCard({ content, streamEndRef }) {
+            return (
+                <div className="animate-slide-up">
+                    <div className="bg-white/95 backdrop-blur-sm rounded-2xl shadow-2xl overflow-hidden border border-white/20">
+                        {/* 标题栏 */}
+                        <div className="bg-gradient-to-r from-primary-600 to-primary-800 px-6 py-4">
+                            <div className="flex items-center gap-3">
+                                <div className="w-3 h-3 bg-green-400 rounded-full animate-breathe" />
+                                <h3 className="text-lg font-bold text-white">
+                                    分析结果
+                                </h3>
+                                <span className="ml-auto text-white/70 text-sm">
+                                    实时生成中...
+                                </span>
+                            </div>
+                        </div>
+
+                        {/* 内容区域 */}
+                        <div className="p-8 prose prose-slate max-w-none">
+                            <div className="text-gray-800 leading-relaxed whitespace-pre-line text-lg">
+                                {content || <span className="text-gray-400">正在整理分析结果...</span>}
+                            </div>
+                            <div ref={streamEndRef} />
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        // 报告卡片组件
+        function ReportCard({ report }) {
+            if (!report) return null;
+
+            const metadata = report.metadata || {};
+            const summary = report.summary || '';
+            const keySkills = report.key_skills || [];
+            const softSkills = report.soft_skills || [];
+            const learningPlan = report.learning_plan || [];
+            const resources = report.resources || [];
+            const salaryInsights = report.salary_insights || '';
+            const careerPath = report.career_path || '';
+
+            return (
+                <div className="animate-slide-up space-y-6">
+                    {/* 市场概览 */}
+                    <SectionCard
+                        icon="📊"
+                        title="市场概览"
+                        content={summary}
+                    />
+
+                    {/* 技术技能 */}
+                    <div className="bg-white/95 backdrop-blur-sm rounded-2xl shadow-2xl p-8 border border-white/20">
+                        <div className="flex items-center gap-3 mb-6">
+                            <span className="text-3xl">💻</span>
+                            <h2 className="text-2xl font-bold text-gray-800">
+                                核心技术技能
+                            </h2>
+                        </div>
+                        <div className="flex flex-wrap gap-3">
+                            {keySkills.slice(0, 20).map((skill, i) => (
+                                <span
+                                    key={i}
+                                    className="px-4 py-2 bg-gradient-to-r from-primary-500 to-primary-700 text-white rounded-full text-sm font-medium shadow-md hover:shadow-lg transition-shadow duration-200"
+                                >
+                                    {skill}
+                                </span>
+                            ))}
+                        </div>
+                    </div>
+
+                    {/* 软技能 */}
+                    <div className="bg-white/95 backdrop-blur-sm rounded-2xl shadow-2xl p-8 border border-white/20">
+                        <div className="flex items-center gap-3 mb-6">
+                            <span className="text-3xl">🤝</span>
+                            <h2 className="text-2xl font-bold text-gray-800">
+                                软技能与素质
+                            </h2>
+                        </div>
+                        <div className="flex flex-wrap gap-3">
+                            {softSkills.map((skill, i) => (
+                                <span
+                                    key={i}
+                                    className="px-4 py-2 bg-gradient-to-r from-pink-400 to-rose-500 text-white rounded-full text-sm font-medium shadow-md hover:shadow-lg transition-shadow duration-200"
+                                >
+                                    {skill}
+                                </span>
+                            ))}
+                        </div>
+                    </div>
+
+                    {/* 学习计划 */}
+                    <div className="bg-white/95 backdrop-blur-sm rounded-2xl shadow-2xl p-8 border border-white/20">
+                        <div className="flex items-center gap-3 mb-6">
+                            <span className="text-3xl">📚</span>
+                            <h2 className="text-2xl font-bold text-gray-800">
+                                结构化学习计划
+                            </h2>
+                        </div>
+                        <div className="space-y-6">
+                            {learningPlan.map((phase, i) => (
+                                <div key={i} className="bg-gradient-to-br from-gray-50 to-white rounded-xl p-6 border-l-4 border-primary-500 shadow-md">
+                                    <h3 className="text-xl font-bold text-gray-800 mb-2">
+                                        {phase.phase}
+                                    </h3>
+                                    <p className="text-gray-500 text-sm mb-4">
+                                        ⏱️ {phase.duration}
+                                    </p>
+
+                                    {phase.objectives && phase.objectives.length > 0 && (
+                                        <div className="mb-4">
+                                            <h4 className="font-semibold text-gray-700 mb-2">🎯 学习目标</h4>
+                                            <ul className="list-disc list-inside text-gray-600 space-y-1">
+                                                {phase.objectives.map((obj, j) => (
+                                                    <li key={j}>{obj}</li>
+                                                ))}
+                                            </ul>
+                                        </div>
+                                    )}
+
+                                    {phase.skills && phase.skills.length > 0 && (
+                                        <div className="mb-4">
+                                            <h4 className="font-semibold text-gray-700 mb-2">📖 技能掌握</h4>
+                                            <div className="flex flex-wrap gap-2">
+                                                {phase.skills.map((skill, j) => (
+                                                    <span key={j} className="px-3 py-1 bg-primary-100 text-primary-700 rounded-full text-xs">
+                                                        {skill}
+                                                    </span>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    )}
+
+                                    {phase.projects && phase.projects.length > 0 && (
+                                        <div className="mb-4">
+                                            <h4 className="font-semibold text-gray-700 mb-2">🛠️ 推荐项目</h4>
+                                            <ul className="list-disc list-inside text-gray-600 space-y-1">
+                                                {phase.projects.map((proj, j) => (
+                                                    <li key={j}>{proj}</li>
+                                                ))}
+                                            </ul>
+                                        </div>
+                                    )}
+
+                                    {phase.resources && phase.resources.length > 0 && (
+                                        <div>
+                                            <h4 className="font-semibold text-gray-700 mb-2">📚 学习资源</h4>
+                                            <ul className="space-y-2">
+                                                {phase.resources.map((res, j) => (
+                                                    <li key={j} className="text-sm text-gray-600">
+                                                        <span className="font-medium">{res.name}</span>
+                                                        <span className="text-gray-400 mx-2">•</span>
+                                                        <span>{res.type}</span>
+                                                        {res.description && (
+                                                            <>
+                                                                <span className="text-gray-400 mx-2">•</span>
+                                                                <span>{res.description}</span>
+                                                            </>
+                                                        )}
+                                                    </li>
+                                                ))}
+                                            </ul>
+                                        </div>
+                                    )}
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+
+                    {/* 薪资洞察 */}
+                    <SectionCard
+                        icon="💰"
+                        title="薪资洞察"
+                        content={salaryInsights}
+                    />
+
+                    {/* 职业路径 */}
+                    <SectionCard
+                        icon="🎯"
+                        title="职业发展路径"
+                        content={careerPath}
+                    />
+
+                    {/* 元数据 */}
+                    <div className="bg-gradient-to-br from-primary-50 to-white rounded-2xl shadow-lg p-6 border border-primary-100">
+                        <div className="text-center text-sm text-gray-600">
+                            <p className="mb-2">
+                                📅 分析时间: {metadata.analysis_date || 'N/A'}
+                            </p>
+                            <p className="mb-2">
+                                🤖 使用模型: {metadata.model_used || 'AI'}
+                            </p>
+                            <p>
+                                📊 分析职位数: {metadata.jobs_analyzed || 0} 个
+                            </p>
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        // 通用内容卡片组件
+        function SectionCard({ icon, title, content }) {
+            return (
+                <div className="bg-white/95 backdrop-blur-sm rounded-2xl shadow-2xl p-8 border border-white/20">
+                    <div className="flex items-center gap-3 mb-6">
+                        <span className="text-3xl">{icon}</span>
+                        <h2 className="text-2xl font-bold text-gray-800">
+                            {title}
+                        </h2>
+                    </div>
+                    <div className="prose prose-lg max-w-none">
+                        <p className="text-gray-700 leading-relaxed whitespace-pre-line">
+                            {content}
+                        </p>
+                    </div>
+                </div>
+            );
+        }
+
+        // 页脚组件
+        function Footer() {
+            return (
+                <div className="mt-12 text-center animate-fade-in">
+                    <div className="bg-white/10 backdrop-blur-sm rounded-2xl p-8 border border-white/20">
+                        <p className="text-white/90 text-sm mb-2">
+                            由 Boss Zhipin Scraper 驱动 | 使用 LangChain + AI 分析技术
+                        </p>
+                        <p className="text-white/70 text-xs">
+                            © 2025 AI 职业规划助手 | 基于 React + Tailwind CSS 构建
+                        </p>
+                        <a
+                            href="/"
+                            className="inline-block mt-4 px-6 py-2 bg-white/20 hover:bg-white/30 text-white rounded-full transition-colors duration-200 text-sm font-medium"
+                        >
+                            返回首页
+                        </a>
+                    </div>
+                </div>
+            );
+        }
+
+        // 渲染应用
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+
+</html>

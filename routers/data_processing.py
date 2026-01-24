@@ -2,19 +2,14 @@
 Data processing router - handles all data analysis and filtering endpoints
 """
 from fastapi import APIRouter, Query, HTTPException
+from fastapi.responses import HTMLResponse, StreamingResponse
 import logging
-import re
 import json
-import base64
-from io import BytesIO
-from collections import Counter
+import os
 import pandas as pd
-import numpy as np
-from wordcloud import WordCloud
-import matplotlib
-matplotlib.use('Agg')  # Use non-interactive backend
-import matplotlib.pyplot as plt
 from database import get_jobs_info, handle_job_info, get_agent_jobs_info, handle_agent_job_info
+from services.langchain_service import get_job_analysis_service
+from services.data_service import get_data_service
 
 logger = logging.getLogger(__name__)
 
@@ -23,85 +18,9 @@ router = APIRouter(
     tags=["data-processing"]
 )
 
-
-def generate_wordcloud(skill_counts: dict, width: int = 800, height: int = 400) -> str:
-    """
-    Generate word cloud image from skill frequency data.
-
-    Args:
-        skill_counts: Dictionary of skills and their counts
-        width: Image width in pixels
-        height: Image height in pixels
-
-    Returns:
-        Base64 encoded PNG image
-    """
-    if not skill_counts:
-        return None
-
-    try:
-        # Try to use a font that supports Chinese characters
-        # Common Chinese fonts: SimHei, Microsoft YaHei, PingFang SC
-        font_path = None
-        possible_fonts = [
-            'C:/Windows/Fonts/msyh.ttc',  # Microsoft YaHei (Windows)
-            'C:/Windows/Fonts/simhei.ttf',  # SimHei (Windows)
-            '/System/Library/Fonts/PingFang.ttc',  # PingFang (macOS)
-            '/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf',  # Linux
-        ]
-
-        import os
-        for font in possible_fonts:
-            if os.path.exists(font):
-                font_path = font
-                logger.info(f"Using font: {font_path}")
-                break
-
-        # Create word cloud with font if available
-        if font_path:
-            wordcloud = WordCloud(
-                width=width,
-                height=height,
-                background_color='white',
-                colormap='viridis',
-                max_words=100,
-                relative_scaling=0.5,
-                min_font_size=10,
-                font_path=font_path
-            ).generate_from_frequencies(skill_counts)
-        else:
-            # Fallback without font (may not display Chinese correctly)
-            wordcloud = WordCloud(
-                width=width,
-                height=height,
-                background_color='white',
-                colormap='viridis',
-                max_words=100,
-                relative_scaling=0.5,
-                min_font_size=10,
-                prefer_horizontal=0.9
-            ).generate_from_frequencies(skill_counts)
-            logger.warning("No Chinese font found, Chinese characters may not display correctly")
-
-        # Create figure
-        fig, ax = plt.subplots(figsize=(10, 5))
-        ax.imshow(wordcloud, interpolation='bilinear')
-        ax.axis('off')
-        ax.set_title('AI Agent Skills Word Cloud', fontsize=16, pad=20, fontfamily='sans-serif')
-
-        # Save to BytesIO
-        buf = BytesIO()
-        plt.savefig(buf, format='png', bbox_inches='tight', dpi=100)
-        buf.seek(0)
-        plt.close(fig)
-
-        # Encode to base64
-        img_base64 = base64.b64encode(buf.read()).decode('utf-8')
-        return img_base64
-
-    except Exception as e:
-        logger.error(f"Error generating word cloud: {e}")
-        return None
+# Initialize services
+data_service = get_data_service()
+analysis_service = get_job_analysis_service()
 
 
 @router.get("/health")
@@ -114,21 +33,16 @@ async def health_check(table: str = Query(None, description="Table name to query
     df = pd.DataFrame(result)
 
     if df.empty:
-        return {
-            "status": "ok",
-            "data": [],
-            "count": 0,
-            "deleted_count": 0
-        }
+        return {"status": "ok", "data": [], "count": 0, "deleted_count": 0}
 
-    # 筛选出 job_name 和 job_desc 都不包含 EMS、能源 或 储能 的数据 (我们要删除的)
+    # Filter out unwanted jobs
     exclude_regex = 'EMS|能源|储能'
     condition_name = ~df['job_name'].str.contains(exclude_regex, na=False, case=False)
     condition_desc = ~df['job_desc'].str.contains(exclude_regex, na=False, case=False)
+    
     df_filtered = df[condition_name & condition_desc]
     in_ids = df_filtered['job_id'].tolist()
 
-    # 从数据库中删除这些不需要的任务
     if in_ids:
         handle_job_info(in_ids)
 
@@ -152,12 +66,10 @@ async def check_agent_info(table: str = Query(None, description="Table name to q
     if df.empty:
         return {"message": "No agent jobs found", "count": 0, "deleted_count": 0}
 
-    # 筛选出 job_name 不包含 agent 或 ai (不区分大小写)
-    # 或 job_desc 不包含 agent (不区分大小写) 的数据
+    # Filter rules: job_name contains agent/ai OR job_desc contains agent
     condition_name = ~df['job_name'].str.contains('agent|ai', na=False, case=False)
     condition_desc = ~df['job_desc'].str.contains('agent', na=False, case=False)
 
-    # 根据用户要求：job_name不包含 agent/ai AND job_desc不包含 agent
     df_to_delete = df[condition_name & condition_desc]
     in_ids = df_to_delete['job_id'].tolist()
 
@@ -179,8 +91,6 @@ async def analyze_agent_skills(
 ):
     """
     Analyze and extract top skills from agent-related job postings.
-    Extracts skills from skills_tags JSON and job descriptions.
-    Returns the top 20 most common skills with optional word cloud image.
     """
     result = get_agent_jobs_info(table=table)
     if not result:
@@ -191,53 +101,85 @@ async def analyze_agent_skills(
             "wordcloud": None
         }
 
-    all_skills = []
-
-    for job in result:
-        # 1. 从 skills_tags 提取 (JSON 格式)
-        tags_raw = job.get('skills_tags')
-        if tags_raw:
-            try:
-                tags = json.loads(tags_raw)
-                if isinstance(tags, list):
-                    all_skills.extend([tag.lower() for tag in tags])
-            except:
-                pass
-
-        # 2. 从 job_desc 提取英文关键词/常见技能 (正则)
-        desc = job.get('job_desc', '')
-        if desc:
-            # 匹配连续的英文字符或C++/C#等常见技术词汇
-            eng_words = re.findall(r'[a-zA-Z0-9+#]+', desc)
-            # 过滤掉太短的或者纯数字
-            filtered_eng = [w.lower() for w in eng_words if len(w) > 1 and not w.isdigit()]
-            all_skills.extend(filtered_eng)
-
-            # 匹配常见的中文技能关键词 (可选，根据具体情况添加)
-            # 比如：大模型, 深度学习, 机器学习 等
-            cn_keywords = ["大模型", "深度学习", "机器学习", "自然语言处理", "图像识别", "算法"]
-            for kw in cn_keywords:
-                if kw in desc:
-                    all_skills.append(kw)
-
-    # 3. 统计频率并取前20
-    skill_counts = Counter(all_skills)
-
-    # 过滤掉一些极其常见的无意义词汇 (Stop words)
-    stop_words = {'and', 'the', 'with', 'to', 'of', 'in', 'for', 'boss', 'kanzhun', 'api', 'agent', 'ai'}
-    # ai, agent 作为职位背景通常出现次数最高，可考虑过滤
-    clean_counts = {k: v for k, v in skill_counts.items() if k not in stop_words}
-
-    top_skills = Counter(clean_counts).most_common(20)
+    # Use DataService to extract skills
+    clean_counts = data_service.extract_skills(result)
+    top_skills = pd.Series(clean_counts).sort_values(ascending=False).head(20).to_dict()
 
     # Generate word cloud if requested
     wordcloud_base64 = None
     if generate_wordcloud_img and clean_counts:
-        wordcloud_base64 = generate_wordcloud(clean_counts)
+        wordcloud_base64 = data_service.generate_wordcloud(clean_counts)
 
     return {
         "message": "AI Agent skills analyzed successfully",
         "total_jobs_analyzed": len(result),
-        "top_skills": [{"skill": s, "count": c} for s, c in top_skills],
-        "wordcloud": wordcloud_base64  # Base64 encoded PNG image
+        "top_skills": [{"skill": s, "count": int(c)} for s, c in top_skills.items()],
+        "wordcloud": wordcloud_base64
     }
+
+
+# ============================================================================
+# Streaming Career Analysis Endpoints (LangChain-powered)
+# ============================================================================
+
+@router.get("/analyze-career-stream", response_class=HTMLResponse)
+async def analyze_career_stream_page(
+    table: str = Query(None, description="Table name to query"),
+    limit: int = Query(20, description="Maximum number of jobs to analyze", ge=1, le=50)
+):
+    """Serve the streaming career analysis HTML page."""
+    jobs = get_agent_jobs_info(table=table)
+
+    if not jobs:
+        return HTMLResponse(
+            content="<html><body><h1>No Jobs Found</h1><p>Please scrape some jobs first.</p></body></html>",
+            status_code=404
+        )
+
+    jobs_to_analyze = jobs[:limit]
+    template_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "templates", "career_stream.html")
+
+    try:
+        with open(template_path, "r", encoding="utf-8") as f:
+            template_content = f.read()
+            total_str = str(len(jobs_to_analyze))
+            html_content = template_content.replace("{{ total_jobs }}", total_str).replace("{{total_jobs}}", total_str)
+        return HTMLResponse(content=html_content)
+    except Exception as e:
+        logger.error(f"Error loading template: {e}")
+        return HTMLResponse(content=f"<html><body><h1>Error</h1><p>{str(e)}</p></body></html>", status_code=500)
+
+
+@router.get("/api/analyze-career-stream")
+async def analyze_career_stream_api(
+    table: str = Query(None, description="Table name to query"),
+    limit: int = Query(20, description="Maximum number of jobs to analyze", ge=1, le=50),
+    prompt: str = Query(None, description="Custom analysis prompt for the AI agent")
+):
+    """SSE endpoint for streaming career analysis."""
+    async def event_stream():
+        try:
+            jobs = get_agent_jobs_info(table=table)
+            if not jobs:
+                yield f"data: {json.dumps({'type': 'error', 'message': 'No jobs found'}, ensure_ascii=False)}\n\n"
+                return
+
+            jobs_to_analyze = jobs[:limit]
+            logger.info(f"Streaming analysis of {len(jobs_to_analyze)} jobs with prompt: {prompt}")
+
+            async for chunk in analysis_service.analyze_jobs_streaming(jobs_to_analyze, user_prompt=prompt):
+                yield f"data: {chunk}\n\n"
+
+        except Exception as e:
+            logger.error(f"Error in streaming API: {e}")
+            yield f"data: {json.dumps({'type': 'error', 'message': str(e)}, ensure_ascii=False)}\n\n"
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no"
+        }
+    )

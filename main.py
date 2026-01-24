@@ -38,7 +38,18 @@ async def root():
         "endpoints": {
             "dashboard": "/dashboard",
             "scraper": "/scrape",
-            "data_processing": ["/data/health", "/data/check-agent", "/data/analyze-agent-skills"]
+            "data_processing": [
+                "/data/health",
+                "/data/check-agent",
+                "/data/analyze-agent-skills",
+                "/data/analyze-career-stream",
+                "/data/api/analyze-career-stream"
+            ]
+        },
+        "streaming_info": {
+            "streaming_page": "Visit /data/analyze-career-stream for real-time analysis with typewriter effect",
+            "streaming_api": "Use /data/api/analyze-career-stream for Server-Sent Events (SSE) stream",
+            "note": "All career analysis endpoints use streaming for better user experience"
         }
     }
 

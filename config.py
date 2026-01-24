@@ -17,3 +17,9 @@ class Config:
 
     # Scraper Configuration
     CHROME_PORT = 9222
+
+    # LLM Configuration for Career Analysis
+    LLM_API_KEY = os.getenv("LLM_API_KEY")
+    LLM_API_BASE = os.getenv("LLM_API_BASE", "https://api.openai.com/v1")
+    LLM_MODEL_NAME = os.getenv("LLM_MODEL_NAME", "gpt-4o-mini")
+    LLM_TEMPERATURE = float(os.getenv("LLM_TEMPERATURE", "0.7"))
