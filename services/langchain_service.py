@@ -9,57 +9,12 @@ from typing import List, Dict, AsyncGenerator, Any
 from datetime import datetime
 
 from langchain_openai import ChatOpenAI
-from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.output_parsers import StrOutputParser
-from langchain_core.runnables import RunnablePassthrough
 from langchain.tools import tool
 from langchain.agents import create_agent
 from services.data_service import get_data_service
 
 logger = logging.getLogger(__name__)
-
-# Prompt template for job analysis
-CAREER_ANALYSIS_PROMPT = """你是一位专业的职业规划顾问和技术招聘专家，专注于人工智能、机器学习和软件工程领域。
-你的任务是分析多个职位招聘信息，并生成一份全面的职业发展报告。
-
-# 待分析的职位信息:
-
-{job_data}
-
-# 你的任务:
-
-基于上述职位信息，提供一份全面的分析。请将你的回复格式化为以下 JSON 结构:
-
-{{
-  "summary": "2-3段市场总结，用中文描述当前职位市场趋势",
-  "key_skills": ["技能1", "技能2", ...],
-  "soft_skills": ["软技能1", "软技能2", ...],
-  "learning_plan": [
-    {{
-      "phase": "阶段名称（中文）",
-      "duration": "时间周期",
-      "objectives": ["学习目标1", "学习目标2"],
-      "skills": ["技能1", "技能2"],
-      "projects": ["项目1", "项目2"],
-      "resources": [{{"name": "资源名称", "type": "类型", "description": "描述"}}]
-    }}
-  ],
-  "resources": [
-    {{"category": "分类", "items": ["资源1", "资源2"]}}
-  ],
-  "salary_insights": "详细的薪资分析（用中文描述）",
-  "career_path": "职业发展路径描述（用中文）"
-}}
-
-# 重要要求:
-
-1. **所有内容必须使用中文输出**，除了技术术语（如 Python、TensorFlow 等保留英文）
-2. 只提供 JSON 对象，不要使用 markdown 标记，不要代码块标记，不要额外文本
-3. 技能名称可以是英文（专业术语），但描述要用中文
-4. 资源名称如果是书籍、课程等，保留原名
-5. 确保内容具体、可操作，不要空洞的描述
-
-现在开始你的分析："""
 
 
 class JobAnalysisService:
@@ -76,11 +31,26 @@ class JobAnalysisService:
         self.api_key = os.getenv("LLM_API_KEY")
         self.api_base = os.getenv("LLM_API_BASE", "https://api.openai.com/v1")
         self.model_name = os.getenv("LLM_MODEL_NAME", "gpt-4o-mini")
-        self.temperature = float(os.getenv("LLM_TEMPERATURE", "0.7"))
+
+        # Validate and set temperature with proper range checking
+        temp_str = os.getenv("LLM_TEMPERATURE", "0.7")
+        try:
+            self.temperature = float(temp_str)
+            if not 0.0 <= self.temperature <= 2.0:
+                logger.warning(f"Temperature {self.temperature} out of range [0.0, 2.0], using default 0.7")
+                self.temperature = 0.7
+        except ValueError:
+            logger.warning(f"Invalid temperature value '{temp_str}', using default 0.7")
+            self.temperature = 0.7
 
         if not self.api_key:
             logger.error("LLM_API_KEY not found in environment variables")
             raise ValueError("LLM_API_KEY is required but not set")
+
+        # Validate API base URL format
+        if self.api_base and not (self.api_base.startswith("http://") or self.api_base.startswith("https://")):
+            logger.error(f"Invalid LLM_API_BASE format: {self.api_base}")
+            raise ValueError("LLM_API_BASE must be a valid URL starting with http:// or https://")
 
     def _init_llm(self):
         """Initialize LLM and base components."""
@@ -99,6 +69,13 @@ class JobAnalysisService:
         """Format job data for the LLM prompt."""
         formatted_jobs = []
         for i, job in enumerate(jobs, 1):
+            # Safely truncate job description to avoid errors
+            job_desc = job.get('job_desc', 'N/A')
+            if job_desc and isinstance(job_desc, str) and len(job_desc) > 500:
+                job_desc = job_desc[:500] + "..."
+            elif not isinstance(job_desc, str):
+                job_desc = 'N/A'
+
             job_text = f"""
 ## Job {i}:
 - Position: {job.get('job_name', 'N/A')}
@@ -108,20 +85,10 @@ class JobAnalysisService:
 - Experience: {job.get('experience_raw', 'N/A')}
 - Education: {job.get('education', 'N/A')}
 - Skills: {job.get('skills_tags', 'N/A')}
-- Description: {job.get('job_desc', 'N/A')[:500]}...
+- Description: {job_desc}
 """
             formatted_jobs.append(job_text)
         return "\n".join(formatted_jobs)
-
-    def _get_analysis_chain(self):
-        """Create the LangChain analysis chain."""
-        prompt = ChatPromptTemplate.from_template(CAREER_ANALYSIS_PROMPT)
-        return (
-            {"job_data": RunnablePassthrough()}
-            | prompt
-            | self.llm
-            | self.str_parser
-        )
 
     def _clean_json_response(self, text: str) -> str:
         """Remove markdown code blocks from LLM response."""
@@ -130,10 +97,68 @@ class JobAnalysisService:
             text = text[7:]
         elif text.startswith("```"):
             text = text[3:]
-        
+
         if text.endswith("```"):
             text = text[:-3]
         return text.strip()
+
+    def _validate_jobs_input(self, jobs: List[Dict]) -> None:
+        """Validate jobs list structure and content."""
+        if not isinstance(jobs, list):
+            raise ValueError("jobs must be a list")
+
+        if len(jobs) > 1000:
+            raise ValueError(f"Too many jobs provided (max 1000, got {len(jobs)})")
+
+        required_fields = ['job_name', 'company_name']
+        for i, job in enumerate(jobs):
+            if not isinstance(job, dict):
+                raise ValueError(f"Job at index {i} must be a dictionary")
+
+            # Check for at least some required fields
+            if not any(field in job for field in required_fields):
+                logger.warning(f"Job at index {i} missing required fields: {required_fields}")
+
+    def _sanitize_user_prompt(self, user_prompt: str) -> str:
+        """Sanitize user prompt to prevent prompt injection."""
+        if user_prompt is None:
+            return None
+
+        if not isinstance(user_prompt, str):
+            raise ValueError("user_prompt must be a string")
+
+        # Limit prompt length
+        max_length = 2000
+        if len(user_prompt) > max_length:
+            logger.warning(f"user_prompt truncated from {len(user_prompt)} to {max_length} chars")
+            user_prompt = user_prompt[:max_length]
+
+        # Remove potentially dangerous patterns
+        dangerous_patterns = ['<system>', '<instruction>', '<admin>']
+        for pattern in dangerous_patterns:
+            if pattern.lower() in user_prompt.lower():
+                logger.warning(f"Removed potentially dangerous pattern from user_prompt: {pattern}")
+                user_prompt = user_prompt.replace(pattern, '').replace(pattern.lower(), '')
+
+        return user_prompt.strip()
+
+    def _is_thinking_content(self, full_response: str) -> bool:
+        """
+        Determine if current response is inside thinking/reasoning tags.
+
+        Some models (like DeepSeek) output reasoning in special tags.
+        Returns True if we're inside an unclosed thinking tag.
+        """
+        # Count opening and closing tags
+        # The tags appear to be special Chinese characters used by certain models
+        open_tag = "````"
+        close_tag = "```"
+
+        open_count = full_response.count(open_tag)
+        close_count = full_response.count(close_tag)
+
+        # If we have more opening tags than closing tags, we're still "thinking"
+        return open_count > close_count
 
     def _parse_llm_response(self, text: str, jobs_count: int) -> Dict[str, Any]:
         """Parse the raw LLM response into a structured dictionary."""
@@ -163,6 +188,14 @@ class JobAnalysisService:
         """Stream job analysis results in real-time using SSE events."""
         if not jobs:
             yield json.dumps({"type": "error", "message": "没有职位信息可供分析"}, ensure_ascii=False)
+            return
+
+        # Validate and sanitize inputs
+        try:
+            self._validate_jobs_input(jobs)
+            user_prompt = self._sanitize_user_prompt(user_prompt)
+        except ValueError as e:
+            yield json.dumps({"type": "error", "message": f"输入验证失败: {str(e)}"}, ensure_ascii=False)
             return
 
         try:
@@ -255,9 +288,9 @@ class JobAnalysisService:
                         
                         if content:
                             full_response += content
-                            # If content itself looks like it's inside <think> tags, we could flag it, 
-                            # but the frontend handles that too. We can pass a flag if we detect it.
-                            is_thought = "<think>" in full_response and "</think>" not in full_response
+                            # Determine if this content is inside thinking/reasoning tags
+                            # Some models use special tags for reasoning that should be displayed differently
+                            is_thought = self._is_thinking_content(full_response)
                             yield json.dumps({"type": "chunk", "content": content, "is_thought": is_thought}, ensure_ascii=False)
                 
                 elif kind == "on_tool_start":
@@ -286,13 +319,15 @@ class JobAnalysisService:
                 # Remove any thinking tags for parsing
                 clean_text = full_response
                 if "<think>" in clean_text and "</think>" in clean_text:
-                    clean_text = clean_text.split("</think>")[-1]
+                    parts = clean_text.split(r"</think>")
+                    if len(parts) > 1:
+                        clean_text = parts[-1]
                 
                 cleaned_json = self._clean_json_response(clean_text)
                 if cleaned_json and (cleaned_json.startswith("{") or cleaned_json.startswith("[")):
                     report_data = self._parse_llm_response(cleaned_json, len(jobs))
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"Failed to parse structured report from response: {e}")
 
             yield json.dumps({
                 "type": "complete", 

@@ -19,6 +19,10 @@ logger = logging.getLogger(__name__)
 class DataService:
     """Service handling data processing, skill analysis, and visualization logic."""
 
+    # Constants for skill extraction
+    CN_KEYWORDS = ("大模型", "深度学习", "机器学习", "自然语言处理", "图像识别", "算法", "智谱", "通义千问", "文心一言")
+    STOP_WORDS = {'and', 'the', 'with', 'to', 'of', 'in', 'for', 'boss', 'kanzhun', 'api', 'agent', 'ai', 'is'}
+
     @staticmethod
     def get_font_path() -> str:
         """Find a suitable font path for word cloud generation (supports Chinese)."""
@@ -41,6 +45,7 @@ class DataService:
         if not skill_counts:
             return None
 
+        fig = None
         try:
             font_path = cls.get_font_path()
             
@@ -56,9 +61,8 @@ class DataService:
             
             if font_path:
                 wc_params["font_path"] = font_path
-                logger.info(f"Using font for wordcloud: {font_path}")
             else:
-                logger.warning("No Chinese font found for wordcloud")
+                logger.warning("No Chinese font found for wordcloud generation")
 
             wordcloud = WordCloud(**wc_params).generate_from_frequencies(skill_counts)
 
@@ -66,28 +70,28 @@ class DataService:
             fig, ax = plt.subplots(figsize=(10, 5))
             ax.imshow(wordcloud, interpolation='bilinear')
             ax.axis('off')
-            ax.set_title('AI Agent Skills Word Cloud', fontsize=16, pad=20, fontfamily='sans-serif')
+            ax.set_title('AI Agent Skills Word Cloud', fontsize=16, pad=20)
 
             # Save to BytesIO
             buf = BytesIO()
             plt.savefig(buf, format='png', bbox_inches='tight', dpi=100)
             buf.seek(0)
-            plt.close(fig)
-
+            
             return base64.b64encode(buf.read()).decode('utf-8')
 
         except Exception as e:
-            logger.error(f"Error generating word cloud: {e}")
+            logger.error(f"Failed to generate word cloud: {e}", exc_info=True)
             return None
+        finally:
+            if fig:
+                plt.close(fig)
 
-    @staticmethod
-    def extract_skills(jobs: list) -> dict:
+    @classmethod
+    def extract_skills(cls, jobs: list) -> dict:
         """
         Extract and count skills from job postings.
         """
         all_skills = []
-        cn_keywords = ["大模型", "深度学习", "机器学习", "自然语言处理", "图像识别", "算法"]
-        stop_words = {'and', 'the', 'with', 'to', 'of', 'in', 'for', 'boss', 'kanzhun', 'api', 'agent', 'ai'}
 
         for job in jobs:
             # 1. From skills_tags
@@ -96,25 +100,28 @@ class DataService:
                 try:
                     tags = json.loads(tags_raw)
                     if isinstance(tags, list):
-                        all_skills.extend([tag.lower() for tag in tags])
-                except:
-                    pass
+                        all_skills.extend([str(tag).lower() for tag in tags])
+                except json.JSONDecodeError as e:
+                    logger.debug(f"Failed to parse skill tags: {e}")
+                except Exception as e:
+                    logger.error(f"Unexpected error parsing skills_tags: {e}")
 
             # 2. From job_desc
             desc = job.get('job_desc', '')
             if desc:
-                # English keywords
-                eng_words = re.findall(r'[a-zA-Z0-9+#]+', desc)
-                all_skills.extend([w.lower() for w in eng_words if len(w) > 1 and not w.isdigit()])
+                # English keywords: Improved regex to handle C++, C#, etc.
+                # Find sequences of alphanumeric or special programming chars
+                eng_words = re.findall(r'[a-zA-Z0-9+#.]{2,}', desc)
+                all_skills.extend([w.lower().rstrip('.') for w in eng_words if not w.replace('.', '').isdigit()])
                 
                 # Chinese keywords
-                for kw in cn_keywords:
+                for kw in cls.CN_KEYWORDS:
                     if kw in desc:
                         all_skills.append(kw)
 
         skill_counts = Counter(all_skills)
-        # Filter stop words
-        return {k: v for k, v in skill_counts.items() if k not in stop_words}
+        # Filter stop words and return as a new dict (Immutability pattern)
+        return {k: v for k, v in skill_counts.items() if k not in cls.STOP_WORDS and len(k) > 1}
 
 # Singleton instance
 _data_service = DataService()
