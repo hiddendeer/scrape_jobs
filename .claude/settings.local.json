@@ -1,9 +1,0 @@
-{
-  "permissions": {
-    "allow": [
-      "Bash(dir:*)",
-      "Bash(myenv/Scripts/python:*)",
-      "Bash(myenv/Scripts/python -m py_compile:*)"
-    ]
-  }
-}
