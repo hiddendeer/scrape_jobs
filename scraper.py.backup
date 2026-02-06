@@ -165,22 +165,9 @@ class BossScraper:
     def scrape_keyword(self, keyword, pages=3, city_code="100010000"):
         """
         Scrapes job data using infinite scroll.
-
-        Args:
-            keyword: 搜索关键词
-            pages: 最大翻页次数（安全限制，默认3，最大50）
-            city_code: 城市代码
+        'pages' here essentially means how many times to scroll/load more.
         """
-        # 添加最大页数限制
-        MAX_PAGES = 50
-        if pages > MAX_PAGES:
-            logger.warning(f"Requested pages ({pages}) exceeds maximum ({MAX_PAGES}), limiting to {MAX_PAGES}")
-            pages = MAX_PAGES
-
-        if pages < 1:
-            logger.warning("Pages must be at least 1")
-            return
-
+        results = []
         target_url_substring = 'wapi/zpgeek/search/joblist.json'
         
         try:

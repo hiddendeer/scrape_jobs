@@ -5,7 +5,7 @@ from fastapi import APIRouter, BackgroundTasks
 import logging
 from pydantic import BaseModel
 from scraper import BossScraper
-from database import insert_jobs
+from database import insert_jobs, mark_non_ai_jobs_deleted
 from config import Config
 
 logger = logging.getLogger(__name__)
@@ -67,7 +67,7 @@ def run_scraper_task(keyword: str, pages: int, cities: list[str], table: str):
         logger.error(f"Background task failed: {e}")
 
 
-@router.post("/")
+@router.post("/scrape")
 async def trigger_scrape(request: ScrapeRequest, background_tasks: BackgroundTasks):
     """
     Trigger a scrape task.
@@ -84,3 +84,29 @@ async def trigger_scrape(request: ScrapeRequest, background_tasks: BackgroundTas
         "table": table,
         "status": "processing"
     }
+
+
+@router.post("/cleanup-non-ai")
+async def cleanup_non_ai_jobs(table: str = None):
+    """
+    Mark jobs as deleted where job_name and job_desc don't contain 'ai'.
+    Supports dynamic table name via 'table' parameter.
+    """
+    target_table = table or Config.INSERT_JOBS_TABLE
+
+    try:
+        affected_rows = mark_non_ai_jobs_deleted(table=target_table)
+        return {
+            "message": f"Successfully marked non-AI jobs as deleted",
+            "table": target_table,
+            "affected_rows": affected_rows,
+            "status": "success"
+        }
+    except Exception as e:
+        logger.error(f"Failed to cleanup non-AI jobs: {e}")
+        return {
+            "message": f"Failed to cleanup non-AI jobs",
+            "table": target_table,
+            "error": str(e),
+            "status": "error"
+        }

@@ -8,7 +8,6 @@ import base64
 import os
 from io import BytesIO
 from collections import Counter
-import pandas as pd
 import matplotlib
 matplotlib.use('Agg')  # Use non-interactive backend
 import matplotlib.pyplot as plt
@@ -27,14 +26,26 @@ class DataService:
     def get_font_path() -> str:
         """Find a suitable font path for word cloud generation (supports Chinese)."""
         possible_fonts = [
-            'C:/Windows/Fonts/msyh.ttc',  # Microsoft YaHei (Windows)
-            'C:/Windows/Fonts/simhei.ttf',  # SimHei (Windows)
-            '/System/Library/Fonts/PingFang.ttc',  # PingFang (macOS)
+            'C:/Windows/Fonts/msyh.ttc',      # Microsoft YaHei (Windows)
+            'C:/Windows/Fonts/simhei.ttf',    # SimHei (Windows)
+            'C:/Windows/Fonts/simsun.ttc',    # SimSun (Windows)
+            '/System/Library/Fonts/PingFang.ttc',           # PingFang (macOS)
+            '/System/Library/Fonts/STHeiti Light.ttc',      # Heiti (macOS)
             '/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf',  # Linux
+            '/usr/share/fonts/truetype/wqy/wqy-microhei.ttc',  # Linux
+            '/usr/share/fonts/truetype/arphic/uming.ttc',        # Linux
         ]
+
         for font in possible_fonts:
             if os.path.exists(font):
+                logger.info(f"Using font: {font}")
                 return font
+
+        logger.warning(
+            "No Chinese font found for wordcloud generation. "
+            "Chinese characters may not display correctly. "
+            "Install a Chinese font or set FONT_PATH environment variable."
+        )
         return None
 
     @classmethod

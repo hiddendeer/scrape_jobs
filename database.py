@@ -8,6 +8,21 @@ from config import Config
 logger = logging.getLogger(__name__)
 
 def get_connection():
+    # 验证必需的数据库配置参数
+    required_configs = {
+        'DB_HOST': Config.DB_HOST,
+        'DB_USER': Config.DB_USER,
+        'DB_PASSWORD': Config.DB_PASSWORD,
+        'DB_NAME': Config.DB_NAME
+    }
+
+    missing = [k for k, v in required_configs.items() if v is None]
+    if missing:
+        raise ValueError(
+            f"数据库配置不完整，缺少以下环境变量: {', '.join(missing)}. "
+            f"请检查 .env 文件或环境变量设置。"
+        )
+
     return pymysql.connect(
         host=Config.DB_HOST,
         port=Config.DB_PORT,
@@ -19,9 +34,55 @@ def get_connection():
     )
 
 def init_db():
-    # Since user provided schema is already active, we might skip creation or just log.
-    # But for safety, we keep connection check.
-    pass
+    """初始化数据库表"""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            # 检查表是否已存在
+            cursor.execute(f"SHOW TABLES LIKE '{Config.INSERT_JOBS_TABLE}'")
+            result = cursor.fetchone()
+
+            if result:
+                logger.info(f"Table '{Config.INSERT_JOBS_TABLE}' already exists.")
+                return
+
+            # 创建 agent_jobs 表
+            create_table_sql = f"""
+            CREATE TABLE {Config.INSERT_JOBS_TABLE} (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                job_id VARCHAR(100) UNIQUE,
+                job_name VARCHAR(255),
+                company_name VARCHAR(255),
+                city VARCHAR(100),
+                district VARCHAR(100),
+                salary_raw VARCHAR(100),
+                salary_min INT,
+                salary_max INT,
+                salary_avg INT,
+                salary_months INT,
+                experience_raw VARCHAR(100),
+                exp_min INT,
+                exp_max INT,
+                education VARCHAR(100),
+                skills_tags TEXT,
+                job_desc TEXT,
+                detail_url VARCHAR(500),
+                scraped_time DATETIME,
+                is_deleted TINYINT DEFAULT 0,
+                INDEX idx_job_id (job_id),
+                INDEX idx_city (city),
+                INDEX idx_is_deleted (is_deleted)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+            """
+            cursor.execute(create_table_sql)
+            conn.commit()
+            logger.info(f"Database table '{Config.INSERT_JOBS_TABLE}' created successfully.")
+    except Exception as e:
+        logger.error(f"Failed to initialize database: {e}")
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
 
 def insert_jobs(jobs, table: Optional[str] = None):
     if not jobs:
@@ -146,5 +207,39 @@ def handle_agent_job_info(job_ids: List[str], table: Optional[str] = None):
     except Exception as e:
         logger.error(f"Error updating agent jobs: {e}")
         conn.rollback()
+    finally:
+        conn.close()
+
+def mark_non_ai_jobs_deleted(table: Optional[str] = None) -> int:
+    """
+    Mark jobs as deleted where job_name and job_desc don't contain 'ai'.
+
+    Args:
+        table: Target table name (optional, uses default from config if not provided)
+
+    Returns:
+        Number of rows affected
+    """
+    target_table = table or Config.INSERT_JOBS_TABLE
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            # Update jobs where neither job_name nor job_desc contains 'ai' (case-insensitive)
+            sql = f"""
+            UPDATE {target_table}
+            SET is_deleted = 1
+            WHERE is_deleted = 0
+              AND (job_name IS NULL OR job_name NOT LIKE '%ai%')
+              AND (job_desc IS NULL OR job_desc NOT LIKE '%ai%')
+            """
+            cursor.execute(sql)
+            affected_rows = cursor.rowcount
+            conn.commit()
+            logger.info(f"Marked {affected_rows} non-AI jobs as deleted in table '{target_table}'.")
+            return affected_rows
+    except Exception as e:
+        logger.error(f"Error marking non-AI jobs as deleted: {e}")
+        conn.rollback()
+        raise
     finally:
         conn.close()
