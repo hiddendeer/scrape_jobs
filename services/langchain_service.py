@@ -5,11 +5,16 @@ Generates competitive reports with learning plans and required skills using stre
 import os
 import logging
 import json
-from typing import List, Dict, AsyncGenerator, Any
+import uuid
+from typing import List, Dict, AsyncGenerator, Any, Optional
 from datetime import datetime
 
 from langchain_openai import ChatOpenAI
 from langchain_core.output_parsers import StrOutputParser
+from langchain_core.messages import BaseMessage, HumanMessage, AIMessage, SystemMessage
+from langchain_core.chat_history import BaseChatMessageHistory, InMemoryChatMessageHistory
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+from langchain_core.runnables.history import RunnableWithMessageHistory
 from langchain.tools import tool
 from langchain.agents import create_agent
 from services.data_service import get_data_service
@@ -342,8 +347,252 @@ class JobAnalysisService:
             yield json.dumps({"type": "error", "message": str(e), "progress": 0}, ensure_ascii=False)
 
 
-# Singleton instance
+# ============================================================================
+# Session-Based Chat Service with Memory (LangChain 1.0+)
+# ============================================================================
+
+class ChatSessionService:
+    """
+    Service for managing LLM conversations with session memory.
+    Uses LangChain 1.0+ RunnableWithMessageHistory for conversation memory.
+    """
+
+    def __init__(self):
+        """Initialize the chat session service."""
+        self._init_config()
+        self._init_llm()
+        self._init_chain()
+        # Store chat histories in memory
+        self._sessions: Dict[str, InMemoryChatMessageHistory] = {}
+        logger.info(f"ChatSessionService initialized with model: {self.model_name}")
+
+    def _init_config(self):
+        """Load configuration from environment variables."""
+        self.api_key = os.getenv("LLM_API_KEY")
+        self.api_base = os.getenv("LLM_API_BASE", "https://api.openai.com/v1")
+        self.model_name = os.getenv("LLM_MODEL_NAME", "gpt-4o-mini")
+
+        temp_str = os.getenv("LLM_TEMPERATURE", "0.7")
+        try:
+            self.temperature = float(temp_str)
+            if not 0.0 <= self.temperature <= 2.0:
+                logger.warning(f"Temperature {self.temperature} out of range [0.0, 2.0], using default 0.7")
+                self.temperature = 0.7
+        except ValueError:
+            logger.warning(f"Invalid temperature value '{temp_str}', using default 0.7")
+            self.temperature = 0.7
+
+        if not self.api_key:
+            logger.error("LLM_API_KEY not found in environment variables")
+            raise ValueError("LLM_API_KEY is required but not set")
+
+        if self.api_base and not (self.api_base.startswith("http://") or self.api_base.startswith("https://")):
+            logger.error(f"Invalid LLM_API_BASE format: {self.api_base}")
+            raise ValueError("LLM_API_BASE must be a valid URL starting with http:// or https://")
+
+    def _init_llm(self):
+        """Initialize LLM instance."""
+        self.llm = ChatOpenAI(
+            model=self.model_name,
+            api_key=self.api_key,
+            base_url=self.api_base,
+            temperature=self.temperature,
+            max_tokens=2000,
+            streaming=False  # Disable streaming for chat sessions
+        )
+
+    def _init_chain(self):
+        """
+        Initialize the conversational chain with memory.
+        Uses LangChain 1.0+ syntax with RunnableWithMessageHistory.
+        """
+        # Create prompt template with system message and history placeholder
+        prompt = ChatPromptTemplate.from_messages([
+            ("system", "你是一个友好、专业的 AI 助手。请用中文回答用户的问题，提供有帮助的建议和信息。"),
+            MessagesPlaceholder(variable_name="history"),
+            ("human", "{input}")
+        ])
+
+        # Create the base chain
+        self.chain = prompt | self.llm | StrOutputParser()
+
+        # Wrap with message history
+        self.runnable_with_history = RunnableWithMessageHistory(
+            runnable=self.chain,
+            get_session_history=self._get_session_history,
+            input_messages_key="input",
+            history_messages_key="history"
+        )
+
+    def _get_session_history(self, session_id: str) -> BaseChatMessageHistory:
+        """
+        Get or create chat history for a session.
+
+        Args:
+            session_id: Unique identifier for the conversation session
+
+        Returns:
+            InMemoryChatMessageHistory for the session
+        """
+        if session_id not in self._sessions:
+            self._sessions[session_id] = InMemoryChatMessageHistory()
+            logger.info(f"Created new chat session: {session_id}")
+        return self._sessions[session_id]
+
+    def _sanitize_input(self, user_input: str) -> str:
+        """Sanitize user input to prevent injection attacks."""
+        if user_input is None:
+            return ""
+
+        if not isinstance(user_input, str):
+            raise ValueError("Input must be a string")
+
+        # Limit input length
+        max_length = 5000
+        if len(user_input) > max_length:
+            logger.warning(f"Input truncated from {len(user_input)} to {max_length} chars")
+            user_input = user_input[:max_length]
+
+        # Remove potentially dangerous patterns
+        dangerous_patterns = ['<system>', '<instruction>', '<admin>', '<ignore>']
+        for pattern in dangerous_patterns:
+            if pattern.lower() in user_input.lower():
+                logger.warning(f"Removed potentially dangerous pattern: {pattern}")
+                user_input = user_input.replace(pattern, '').replace(pattern.lower(), '')
+
+        return user_input.strip()
+
+    async def chat(self, user_input: str, session_id: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Send a message and get a response with conversation memory.
+
+        Args:
+            user_input: User's message
+            session_id: Session identifier (auto-generated if None)
+
+        Returns:
+            Dictionary with response, session_id, and metadata
+        """
+        if not user_input or not user_input.strip():
+            return {
+                "error": "Input cannot be empty",
+                "session_id": session_id,
+                "response": None
+            }
+
+        try:
+            # Sanitize input
+            sanitized_input = self._sanitize_input(user_input)
+
+            # Generate session_id if not provided
+            if session_id is None:
+                session_id = str(uuid.uuid4())
+                logger.info(f"Generated new session_id: {session_id}")
+
+            # Invoke the chain with history
+            response = await self.runnable_with_history.ainvoke(
+                {"input": sanitized_input},
+                config={"configurable": {"session_id": session_id}}
+            )
+
+            # Get session info
+            session_history = self._get_session_history(session_id)
+            message_count = len(session_history.messages)
+
+            return {
+                "response": response,
+                "session_id": session_id,
+                "message_count": message_count,
+                "model_used": self.model_name,
+                "timestamp": datetime.now().isoformat()
+            }
+
+        except ValueError as e:
+            logger.error(f"Validation error in chat: {e}")
+            return {
+                "error": str(e),
+                "session_id": session_id,
+                "response": None
+            }
+        except Exception as e:
+            logger.error(f"Error in chat: {e}", exc_info=True)
+            return {
+                "error": f"Internal error: {str(e)}",
+                "session_id": session_id,
+                "response": None
+            }
+
+    def get_session_history_messages(self, session_id: str) -> List[Dict[str, str]]:
+        """
+        Get all messages in a session's history.
+
+        Args:
+            session_id: Session identifier
+
+        Returns:
+            List of message dictionaries with role and content
+        """
+        if session_id not in self._sessions:
+            return []
+
+        history = self._sessions[session_id]
+        messages = []
+
+        for msg in history.messages:
+            if isinstance(msg, HumanMessage):
+                messages.append({"role": "user", "content": msg.content})
+            elif isinstance(msg, AIMessage):
+                messages.append({"role": "assistant", "content": msg.content})
+            elif isinstance(msg, SystemMessage):
+                messages.append({"role": "system", "content": msg.content})
+
+        return messages
+
+    def clear_session(self, session_id: str) -> Dict[str, Any]:
+        """
+        Clear chat history for a session.
+
+        Args:
+            session_id: Session identifier
+
+        Returns:
+            Status dictionary
+        """
+        if session_id in self._sessions:
+            del self._sessions[session_id]
+            logger.info(f"Cleared session: {session_id}")
+            return {
+                "success": True,
+                "message": f"Session {session_id} cleared",
+                "session_id": session_id
+            }
+        else:
+            return {
+                "success": False,
+                "message": f"Session {session_id} not found",
+                "session_id": session_id
+            }
+
+    def get_all_sessions(self) -> List[Dict[str, Any]]:
+        """
+        Get information about all active sessions.
+
+        Returns:
+            List of session information dictionaries
+        """
+        sessions = []
+        for session_id, history in self._sessions.items():
+            sessions.append({
+                "session_id": session_id,
+                "message_count": len(history.messages),
+                "created_at": datetime.now().isoformat()  # Could track actual creation time
+            })
+        return sessions
+
+
+# Singleton instances
 _job_analysis_service = None
+_chat_session_service = None
 
 def get_job_analysis_service() -> JobAnalysisService:
     """Get or create the singleton JobAnalysisService instance."""
@@ -351,3 +600,10 @@ def get_job_analysis_service() -> JobAnalysisService:
     if _job_analysis_service is None:
         _job_analysis_service = JobAnalysisService()
     return _job_analysis_service
+
+def get_chat_session_service() -> ChatSessionService:
+    """Get or create the singleton ChatSessionService instance."""
+    global _chat_session_service
+    if _chat_session_service is None:
+        _chat_session_service = ChatSessionService()
+    return _chat_session_service

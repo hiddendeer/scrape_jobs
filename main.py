@@ -3,7 +3,7 @@ from fastapi.responses import FileResponse
 import logging
 import os
 from database import init_db
-from routers import scraper_router, data_processing_router
+from routers import scraper_router, data_processing_router, chat_router
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -28,6 +28,7 @@ def startup_event():
 # Include routers
 app.include_router(scraper_router)
 app.include_router(data_processing_router)
+app.include_router(chat_router)
 
 # Root endpoint
 @app.get("/")
@@ -44,6 +45,13 @@ async def root():
                 "/data/analyze-agent-skills",
                 "/data/analyze-career-stream",
                 "/data/api/analyze-career-stream"
+            ],
+            "chat": [
+                "/chat/message",
+                "/chat/history/{session_id}",
+                "/chat/sessions",
+                "/chat/session/{session_id}",
+                "/chat/health"
             ]
         },
         "streaming_info": {
